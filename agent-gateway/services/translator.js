@@ -11,13 +11,14 @@
 const ADDIS_TRANSLATE_URL = process.env.ADDIS_TRANSLATE_URL || 'https://api.addisassistant.com/api/v1/translate';
 
 /**
- * Perform translation call to Addis AI
+ * Perform translation call to Addis AI with retry logic
  * @param {string} text - Source text to translate
  * @param {string} sourceLang - 'am' or 'en'
  * @param {string} targetLang - 'en' or 'am'
+ * @param {number} retries - Number of retries on network error
  * @returns {Promise<{ translation: string, usage: Object, durationMs: number }>}
  */
-async function callAddisTranslate(text, sourceLang, targetLang) {
+async function callAddisTranslate(text, sourceLang, targetLang, retries = 2) {
   const apiKey = process.env.ADDIS_API_KEY;
 
   // Optional mock mode for testing without active API key
@@ -44,37 +45,49 @@ async function callAddisTranslate(text, sourceLang, targetLang) {
   }
 
   const startTime = Date.now();
-  const response = await fetch(ADDIS_TRANSLATE_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey
-    },
-    body: JSON.stringify({
-      text: text,
-      source_language: sourceLang,
-      target_language: targetLang
-    })
-  });
 
-  const durationMs = Date.now() - startTime;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(ADDIS_TRANSLATE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey
+        },
+        body: JSON.stringify({
+          text: text,
+          source_language: sourceLang,
+          target_language: targetLang
+        })
+      });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Addis AI Translation API error (${response.status}): ${errorText}`);
+      const durationMs = Date.now() - startTime;
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Addis AI Translation API error (${response.status}): ${errorText}`);
+      }
+
+      const result = await response.json();
+
+      if (result.status !== 'success' || !result.data?.translation) {
+        throw new Error(`Invalid response from Addis AI Translation API: ${JSON.stringify(result)}`);
+      }
+
+      return {
+        translation: result.data.translation,
+        usage: result.data.usage_metadata || null,
+        durationMs
+      };
+    } catch (err) {
+      console.warn(`[TRANSLATOR] Attempt ${attempt + 1} failed for ${sourceLang}->${targetLang}:`, err.message);
+      if (attempt === retries) {
+        throw err;
+      }
+      // Wait before retrying (1s delay)
+      await new Promise(r => setTimeout(r, 1000));
+    }
   }
-
-  const result = await response.json();
-
-  if (result.status !== 'success' || !result.data?.translation) {
-    throw new Error(`Invalid response from Addis AI Translation API: ${JSON.stringify(result)}`);
-  }
-
-  return {
-    translation: result.data.translation,
-    usage: result.data.usage_metadata || null,
-    durationMs
-  };
 }
 
 /**
