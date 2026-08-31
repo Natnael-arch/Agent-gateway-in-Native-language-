@@ -1,0 +1,23 @@
+{
+  "name": "agent-gateway",
+  "version": "1.0.0",
+  "description": "Amharic Agent Gateway for Hermes Agent using Addis AI translation API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_pipeline.js"
+  },
+  "keywords": [
+    "amharic",
+    "gateway",
+    "hermes",
+    "addis-ai",
+    "translation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
