@@ -17,6 +17,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve static frontend files from 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Request logging middleware
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.path}`);
