@@ -8,10 +8,16 @@
  * translation step entirely by routing directly to Addis-1-Alef.
  */
 
-const ADDIS_TRANSLATE_URL = process.env.ADDIS_TRANSLATE_URL || 'https://api.addisassistant.com/api/v1/translate';
+function getProxyTranslateUrl() {
+  let rawUrl = (process.env.PROXY_BASE_URL || 'http://localhost:8787').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    rawUrl = `https://${rawUrl}`;
+  }
+  return `${rawUrl}/v1/translate`;
+}
 
 /**
- * Perform translation call to Addis AI with retry logic
+ * Perform translation call to usage-proxy with retry logic
  * @param {string} text - Source text to translate
  * @param {string} sourceLang - 'am' or 'en'
  * @param {string} targetLang - 'en' or 'am'
@@ -19,12 +25,12 @@ const ADDIS_TRANSLATE_URL = process.env.ADDIS_TRANSLATE_URL || 'https://api.addi
  * @returns {Promise<{ translation: string, usage: Object, durationMs: number }>}
  */
 async function callAddisTranslate(text, sourceLang, targetLang, retries = 2) {
-  const apiKey = process.env.ADDIS_API_KEY;
+  const token = process.env.PROXY_TOKEN;
 
-  // Optional mock mode for testing without active API key
-  if (process.env.MOCK_TRANSLATION === 'true' || !apiKey) {
-    if (!apiKey && process.env.MOCK_TRANSLATION !== 'true') {
-      console.warn('[WARNING] ADDIS_API_KEY not set. Falling back to mock translation mode.');
+  // Optional mock mode for testing without active proxy token
+  if (process.env.MOCK_TRANSLATION === 'true' || !token) {
+    if (!token && process.env.MOCK_TRANSLATION !== 'true') {
+      console.warn('[WARNING] PROXY_TOKEN not set. Falling back to mock translation mode.');
     }
     const startTime = Date.now();
     let mockTranslation = text;
@@ -48,11 +54,11 @@ async function callAddisTranslate(text, sourceLang, targetLang, retries = 2) {
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(ADDIS_TRANSLATE_URL, {
+      const response = await fetch(getProxyTranslateUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           text: text,
@@ -65,18 +71,19 @@ async function callAddisTranslate(text, sourceLang, targetLang, retries = 2) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Addis AI Translation API error (${response.status}): ${errorText}`);
+        throw new Error(`Usage Proxy Translation error (${response.status}): ${errorText}`);
       }
 
       const result = await response.json();
+      const translation = result.translation || result.data?.translation;
 
-      if (result.status !== 'success' || !result.data?.translation) {
-        throw new Error(`Invalid response from Addis AI Translation API: ${JSON.stringify(result)}`);
+      if (!translation) {
+        throw new Error(`Invalid response from Usage Proxy Translation API: ${JSON.stringify(result)}`);
       }
 
       return {
-        translation: result.data.translation,
-        usage: result.data.usage_metadata || null,
+        translation,
+        usage: result.usage_metadata || result.data?.usage_metadata || null,
         durationMs
       };
     } catch (err) {

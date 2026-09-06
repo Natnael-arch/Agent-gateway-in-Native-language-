@@ -17,6 +17,17 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// CORS middleware
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Serve static frontend files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -32,7 +43,7 @@ app.get('/health', (req, res) => {
     status: 'online',
     service: 'Amharic Agent Gateway for Hermes Agent',
     timestamp: new Date().toISOString(),
-    mockTranslationMode: process.env.MOCK_TRANSLATION === 'true' || !process.env.ADDIS_API_KEY,
+    mockTranslationMode: process.env.MOCK_TRANSLATION === 'true' || !process.env.PROXY_TOKEN,
     activeSessions: Object.keys(getSessionStore()).length,
     pendingConfirmations: pendingConfirmations.size
   });
@@ -49,7 +60,7 @@ if (require.main === module) {
     console.log(`   Health Check: http://localhost:${PORT}/health`);
     console.log(`   Chat Endpoint: POST http://localhost:${PORT}/api/chat`);
     console.log(`   Confirm Endpoint: POST http://localhost:${PORT}/api/confirm`);
-    console.log(`   Mock Translation Mode: ${process.env.MOCK_TRANSLATION === 'true' || !process.env.ADDIS_API_KEY}`);
+    console.log(`   Mock Translation Mode: ${process.env.MOCK_TRANSLATION === 'true' || !process.env.PROXY_TOKEN}`);
     console.log(`=======================================================`);
   });
 }

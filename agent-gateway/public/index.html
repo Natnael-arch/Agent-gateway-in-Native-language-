@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Amharic Agent Gateway - Test Suite</title>
+  <title>Agelgay - AI Assistant</title>
   
   <!-- Google Fonts: Noto Sans Ethiopic & Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -516,8 +516,8 @@
     <div class="brand">
       <span class="brand-flag">🇪🇹</span>
       <div>
-        <div class="brand-title">Amharic Agent Gateway</div>
-        <div class="brand-subtitle">Powered by Addis AI & Hermes AI Agent</div>
+        <div class="brand-title">Agelgay</div>
+        <div class="brand-subtitle">የእርስዎ አርቴፊሻል ኢንተለጀንስ ረዳት</div>
       </div>
     </div>
 
@@ -539,9 +539,7 @@
       <!-- Welcome Message -->
       <div class="message-row agent">
         <div class="message-bubble">
-👋 **ሰላም! እንኳን ወደ አማርኛ አርቴፊሻል ኢንተለጀንስ መግቢያ በደህና መጡ።**
-
-የሚፈልጉትን ጥያቄ ወይም ትእዛዝ በአማርኛ ይጻፉልኝ። ጥያቄዎን በ **Addis AI** ወደ እንግሊዝኛ በመቀየር ወደ **Hermes Agent** እልካለሁ፤ መልሱንም መልሼ በአማርኛ አቅርብልዎታለሁ።
+👋 **ሰላም! ወደ አገልጋይ እንኳን በደህና መጡ።** እንዴት ልርዳዎት እችላለሁ?
         </div>
       </div>
     </div>
@@ -585,7 +583,13 @@
     const serverStatusText = document.getElementById('serverStatusText');
 
     function getBaseUrl() {
-      return baseUrlInput.value.trim().replace(/\/+$/, '') || 'http://localhost:3000';
+      const val = baseUrlInput.value.trim().replace(/\/+$/, '');
+      if (val) return val;
+      return (window.location.origin && window.location.origin !== 'null') ? window.location.origin : 'http://localhost:3000';
+    }
+
+    if (window.location.origin && window.location.origin !== 'null' && window.location.protocol.startsWith('http')) {
+      baseUrlInput.value = window.location.origin;
     }
 
     // Check Gateway Server Health
@@ -625,9 +629,65 @@
       handleSend(new Event('submit'));
     }
 
+    // Helper function to read SSE streams over HTTP POST fetch
+    async function readSSEStream(url, options, onEvent) {
+      const response = await fetch(url, options);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || `Server Error ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let receivedTerminalEvent = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop(); // Retain incomplete block
+
+        for (const block of blocks) {
+          const trimmed = block.trim();
+          if (!trimmed) continue;
+
+          const dataLines = trimmed
+            .split('\n')
+            .filter(line => line.startsWith('data: '))
+            .map(line => line.substring(6));
+
+          for (const dataStr of dataLines) {
+            try {
+              const event = JSON.parse(dataStr);
+              if (event.type === 'result' || event.type === 'error') {
+                receivedTerminalEvent = true;
+              }
+              onEvent(event);
+            } catch (e) {
+              console.error('SSE parse error:', dataStr, e);
+            }
+          }
+        }
+      }
+
+      if (!receivedTerminalEvent) {
+        throw new Error('የግንኙነት መስመሩ በድንገት ተቋርጧል። እባክዎን እንደገና ይሞክሩ።');
+      }
+    }
+
+    const STAGE_CONFIG = {
+      translate_in: { step: '1/3', label: 'ጥያቄዎን በመተንተን ላይ...' },
+      hermes: { step: '2/3', label: 'መልስ በመፈለግ እና በመስራት ላይ...' },
+      translate_out: { step: '3/3', label: 'መልሱን በማዘጋጀት ላይ...' }
+    };
+
     // Main Send Handler
     async function handleSend(e) {
-      e.preventDefault();
+      if (e) e.preventDefault();
       const text = messageInput.value.trim();
       if (!text) return;
 
@@ -636,40 +696,44 @@
       messageInput.value = '';
       sendBtn.disabled = true;
 
-      // Render Pipeline Loading Indicator
+      // Render Pipeline Loading Indicator immediately
       const pipelineCard = appendPipelineIndicator();
+      updatePipelineStageStart(pipelineCard, 'translate_in');
+      let finalResult = null;
 
       try {
-        // Step 1: Update status indicator to Amharic -> English translation stage
-        updatePipelineStatus(pipelineCard, '● 1/3: ጥያቄዎን ወደ እንግሊዝኛ በመተርጎም ላይ (Addis AI)...');
-
-        const startTime = Date.now();
-        const response = await fetch(`${getBaseUrl()}/api/chat`, {
+        await readSSEStream(`${getBaseUrl()}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: text,
             sessionId: currentSessionId
           })
+        }, (event) => {
+          if (event.type === 'stage') {
+            if (event.status === 'start') {
+              updatePipelineStageStart(pipelineCard, event.stage);
+            } else if (event.status === 'done') {
+              updatePipelineStageDone(pipelineCard, event.stage, event.durationMs);
+            }
+          } else if (event.type === 'result' || event.type === 'error') {
+            finalResult = event;
+          }
         });
 
-        // Remove pipeline indicator
-        pipelineCard.remove();
+        // Remove pipeline indicator when stream completes cleanly
+        pipelineCard?.remove();
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || 'ይቅርታ፣ ጥያቄዎን ማስተላለፍ አልቻልኩም። እባክዎ እንደገና ይሞክሩ።');
-        }
-
-        const data = await response.json();
-
-        // Check if Gateway Response requires confirmation (Consequential Action)
-        if (data.requires_confirmation || data.status === 'confirmation_required') {
-          appendConfirmationCard(data);
-        } else if (data.status === 'success') {
-          appendAgentMessage(data.amharicResponse, data.timing, data.englishResponse);
-        } else {
-          throw new Error(data.message || 'ስህተት አጋጥሟል');
+        if (finalResult) {
+          if (finalResult.type === 'error') {
+            throw new Error(finalResult.message || 'ስህተት አጋጥሟል');
+          } else if (finalResult.requires_confirmation || finalResult.status === 'confirmation_required') {
+            appendConfirmationCard(finalResult);
+          } else if (finalResult.status === 'success') {
+            appendAgentMessage(finalResult.amharicResponse, finalResult.timing, finalResult.englishResponse);
+          } else {
+            throw new Error(finalResult.message || 'ስህተት አጋጥሟል');
+          }
         }
 
       } catch (err) {
@@ -699,9 +763,9 @@
       if (timing) {
         debugHtml = `
           <div class="debug-badge">
-            <span>⏱️ መተርጎም 1: ${timing.translateInMs}ms</span> |
-            <span>🤖 Hermes: ${timing.hermesMs}ms</span> |
-            <span>🇪🇹 መተርጎም 2: ${timing.translateOutMs}ms</span> |
+            <span>⏱️ ትንታኔ: ${timing.translateInMs}ms</span> |
+            <span>🤖 ማሰናዳት: ${timing.hermesMs}ms</span> |
+            <span>🇪🇹 ዝግጅት: ${timing.translateOutMs}ms</span> |
             <span>⚡ ጠቅላላ: ${timing.totalMs}ms</span>
           </div>
         `;
@@ -721,17 +785,31 @@
       card.className = 'pipeline-status-card';
       card.innerHTML = `
         <div class="pulse-ring"></div>
-        <span class="status-text">● 1/3: ጥያቄዎን ወደ እንግሊዝኛ በመተርጎም ላይ...</span>
+        <span class="status-text">● 1/3: ጥያቄዎን በመተንተን ላይ...</span>
       `;
       chatContainer.appendChild(card);
       scrollToBottom();
       return card;
     }
 
-    function updatePipelineStatus(card, text) {
+    function updatePipelineStageStart(card, stage) {
       if (!card) return;
+      const config = STAGE_CONFIG[stage] || { step: '•', label: 'በመስራት ላይ...' };
       const span = card.querySelector('.status-text');
-      if (span) span.textContent = text;
+      const ring = card.querySelector('.pulse-ring');
+      if (ring) ring.style.display = 'block';
+      if (span) {
+        span.textContent = `● ${config.step}: ${config.label}`;
+      }
+    }
+
+    function updatePipelineStageDone(card, stage, durationMs) {
+      if (!card) return;
+      const config = STAGE_CONFIG[stage] || { step: '•', label: '' };
+      const span = card.querySelector('.status-text');
+      if (span && durationMs !== undefined) {
+        span.textContent = `✓ ${config.step} ተጠናቋል (${durationMs}ms)...`;
+      }
     }
 
     // Render Confirmation Card for Consequential Actions
@@ -766,27 +844,39 @@
       btnElement.disabled = true;
       btnElement.textContent = 'በማረጋገጥ ላይ...';
 
+      let finalResult = null;
+
       try {
-        const response = await fetch(`${getBaseUrl()}/api/confirm`, {
+        await readSSEStream(`${getBaseUrl()}/api/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ confirmation_token: token })
+        }, (event) => {
+          if (event.type === 'stage') {
+            if (event.stage === 'hermes' && event.status === 'start') {
+              btnElement.textContent = '⏳ በማስፈጸም ላይ...';
+            } else if (event.stage === 'translate_out' && event.status === 'start') {
+              btnElement.textContent = '⏳ መልሱን በማዘጋጀት ላይ...';
+            }
+          } else if (event.type === 'result') {
+            finalResult = event;
+          } else if (event.type === 'error') {
+            throw new Error(event.message || 'ማረጋገጥ አልተቻለም');
+          }
         });
 
-        const resData = await response.json();
-
-        if (resData.status === 'success') {
+        if (finalResult && finalResult.status === 'success') {
           card.innerHTML = `
             <div class="conf-header" style="color: #22c55e;">
               <span>✅</span>
               <span>እርምጃው ተረጋግጦ ተፈጽሟል</span>
             </div>
             <div class="conf-body">
-              ${formatMarkdown(resData.amharicResponse)}
+              ${formatMarkdown(finalResult.amharicResponse)}
             </div>
           `;
         } else {
-          throw new Error(resData.message || 'ማረጋገጥ አልተቻለም');
+          throw new Error(finalResult?.message || 'ማረጋገጥ አልተቻለም');
         }
       } catch (err) {
         card.innerHTML = `
