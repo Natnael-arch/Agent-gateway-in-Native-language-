@@ -15,6 +15,32 @@ const HERMES_BIN = process.env.HERMES_BIN || '/home/nate/.local/bin/hermes';
 const sessionStore = new Map();
 
 /**
+ * Safety-net heuristics for detecting Hermes-side failure text masquerading
+ * as a legitimate answer. Hermes (as of 0.20.0) exits 0 and prints the error
+ * to STDOUT when its LLM call fails after retries, so the exit code is NOT a
+ * reliable success signal. The authoritative signal is the --usage-file flags
+ * (completed/failed), which this service also reads; these patterns are a
+ * backstop for cases where the usage file is missing or unparseable.
+ */
+const FAILURE_PATTERNS = [
+  /^API call failed/i,                 // Hermes's own post-retry failure banner
+  /Non-retryable error/i,              // provider-side non-retryable failure
+  /HTTP\s+5\d{2}\b/i,                  // upstream 5xx surfaced in output
+  /data:\s*\{\s*["']?id["']?\s*:/i,    // raw SSE fragment (chat.completion.chunk)
+  /chat\.completion\.chunk/i,          // SSE chunk object leaked to stdout
+];
+
+function looksLikeHermesFailure(rawOutput) {
+  if (!rawOutput) return true;
+  return FAILURE_PATTERNS.some((re) => re.test(rawOutput));
+}
+
+function isUsageFileFailed(usage) {
+  if (!usage) return false;
+  return usage.failed === true || usage.completed === false;
+}
+
+/**
  * Send English prompt to local Hermes agent
  * @param {string} englishText - The translated user query
  * @param {Object} options - Options object
@@ -67,6 +93,20 @@ async function sendTask(englishText, options = {}) {
       }
 
       const rawOutput = (stdout || '').trim();
+
+      // ---- Output validation -------------------------------------------------
+      // Treat Hermes output as a failure if EITHER the usage file flags an
+      // incomplete/failed run (authoritative) OR the raw output matches known
+      // error signatures (safety net for missing/broken usage files).
+      if (isUsageFileFailed(usage) || looksLikeHermesFailure(rawOutput)) {
+        const detail = (usage && usage.failure) || rawOutput || '(empty stdout)';
+        console.error('[HERMES] Detected Hermes failure output; not forwarding to translation. Detail:', detail.slice(0, 500));
+        const err = new Error(`Hermes agent returned a failure instead of an answer: ${detail.slice(0, 300)}`);
+        err.hermesFailure = true;
+        err.rawOutput = rawOutput;
+        err.usage = usage;
+        return reject(err);
+      }
 
       // Check for Consequential Action Flag / JSON structure
       let requiresConfirmation = false;
