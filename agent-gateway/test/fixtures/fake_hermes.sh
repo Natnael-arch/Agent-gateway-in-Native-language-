@@ -22,7 +22,7 @@ if [ "$MODE" = "success" ]; then
   "output_tokens": 39,
   "total_tokens": 63,
   "api_calls": 1,
-  "model": "deepseek-v4-flash",
+  "model": "deepseek-flash",
   "session_id": "test_session_1",
   "completed": true,
   "failed": false
@@ -31,7 +31,7 @@ EOF
   exit 0
 elif [ "$MODE" = "fail_sse_stdout" ]; then
   # Mimics the real bug: stream error text leaked to stdout, exit 0.
-  echo 'API call failed after 3 retries: HTTP 502: DeepSeek API returned invalid JSON (HTTP 200): data: {"id":"00f5cc1f","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":['
+  echo 'API call failed after 3 retries: HTTP 502: DeepSeek API returned invalid JSON (HTTP 200): data: {"id":"00f5cc1f","object":"chat.completion.chunk","model":"deepseek-flash","choices":['
   cat > "$USAGE_FILE" <<EOF
 {
   "completed": false,
@@ -50,7 +50,7 @@ else
 {
   "completed": true,
   "failed": false,
-  "model": "deepseek-v4-flash"
+  "model": "deepseek-flash"
 }
 EOF
   exit 0
