@@ -12,6 +12,21 @@ const { logRequest } = require('../utils/logger');
 
 const router = express.Router();
 
+// Per-session in-memory state keyed like the rest of the session store
+// (by sessionId). Currently only carries the conversation language.
+// Defaults to 'am' when unset so existing flows are unchanged.
+const sessions = new Map();
+
+function getSessionLanguage(sessionId) {
+  const existing = sessions.get(sessionId);
+  return existing && existing.language === 'en' ? 'en' : 'am';
+}
+
+function setSessionLanguage(sessionId, language) {
+  const existing = sessions.get(sessionId) || {};
+  sessions.set(sessionId, { ...existing, language });
+}
+
 // Amharic fallback error messages
 const ERROR_MSG_TRANSLATE_IN_FAILED = 'ይቅርታ፣ ያስገቡትን መልእክት መተርጎም አልተቻለም። እባክዎን በሌላ አባባል እንደገና ይሞክሩ።';
 const ERROR_MSG_HERMES_FAILED = 'ይቅርታ፣ ከአርቴፊሻል ኢንተለጀንስ ወኪሉ ጋር ሲገናኙ ስህተት አጋጥሟል። እባክዎን በኋላ እንደገና ይሞክሩ።';
@@ -28,6 +43,32 @@ function sendSSE(res, data) {
 }
 
 /**
+ * Set/update a session's conversation language.
+ * POST /api/session/language
+ * Body: { "sessionId": "optional-session-id", "language": "am" | "en" }
+ *
+ * Same endpoint for both the first choice (new session) and a later change.
+ */
+router.post('/session/language', (req, res) => {
+  const { language, sessionId = 'default-session' } = req.body || {};
+
+  if (language !== 'am' && language !== 'en') {
+    return res.status(400).json({
+      status: 'error',
+      error: "Invalid language. Expected one of: 'am', 'en'."
+    });
+  }
+
+  setSessionLanguage(sessionId, language);
+
+  return res.json({
+    status: 'ok',
+    sessionId,
+    language
+  });
+});
+
+/**
  * Main chat request handler
  * POST /api/chat
  * Body: { "text": "የአማርኛ ጽሑፍ", "sessionId": "optional-session-id" }
@@ -41,9 +82,13 @@ router.post('/chat', async (req, res) => {
   if (!text || typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({
       status: 'error',
-      error: 'Missing required field: text (Amharic prompt text)'
+      error: 'Missing required field: text (prompt text)'
     });
   }
+
+  // Language-driven routing: 'am' keeps the 3-hop translate pipeline; 'en'
+  // sends the raw English text straight to Hermes with no Addis AI calls.
+  const isAmharic = getSessionLanguage(sessionId) === 'am';
 
   // Set SSE Response Headers
   if (req.socket) req.socket.setNoDelay(true);
@@ -62,43 +107,49 @@ router.post('/chat', async (req, res) => {
     hops: {}
   };
 
-  let currentStage = 'translate_in';
+  let currentStage = isAmharic ? 'translate_in' : 'hermes';
 
   try {
     // -------------------------------------------------------------
-    // Hop 1: Translate Amharic -> English via Addis AI
+    // Hop 1 (Amharic only): Translate Amharic -> English via Addis AI
     // -------------------------------------------------------------
-    currentStage = 'translate_in';
-    sendSSE(res, { type: 'stage', stage: 'translate_in', status: 'start' });
+    let englishInput;
+    if (isAmharic) {
+      currentStage = 'translate_in';
+      sendSSE(res, { type: 'stage', stage: 'translate_in', status: 'start' });
 
-    let translateInResult;
-    try {
-      translateInResult = await translateToEnglish(text.trim());
-      logData.hops.translateIn = {
-        durationMs: translateInResult.durationMs,
-        success: true,
-        usage: translateInResult.usage
-      };
-      sendSSE(res, { type: 'stage', stage: 'translate_in', status: 'done', durationMs: translateInResult.durationMs });
-    } catch (err) {
-      logData.hops.translateIn = {
-        durationMs: 0,
-        success: false,
-        error: err.message
-      };
-      logData.error = `Translate In Failed: ${err.message}`;
-      logData.totalDurationMs = Date.now() - startTime;
-      logRequest(logData);
+      let translateInResult;
+      try {
+        translateInResult = await translateToEnglish(text.trim());
+        logData.hops.translateIn = {
+          durationMs: translateInResult.durationMs,
+          success: true,
+          usage: translateInResult.usage
+        };
+        sendSSE(res, { type: 'stage', stage: 'translate_in', status: 'done', durationMs: translateInResult.durationMs });
+      } catch (err) {
+        logData.hops.translateIn = {
+          durationMs: 0,
+          success: false,
+          error: err.message
+        };
+        logData.error = `Translate In Failed: ${err.message}`;
+        logData.totalDurationMs = Date.now() - startTime;
+        logRequest(logData);
 
-      sendSSE(res, {
-        type: 'error',
-        stage: 'translate_in',
-        message: err.message || ERROR_MSG_TRANSLATE_IN_FAILED
-      });
-      return res.end();
+        sendSSE(res, {
+          type: 'error',
+          stage: 'translate_in',
+          message: err.message || ERROR_MSG_TRANSLATE_IN_FAILED
+        });
+        return res.end();
+      }
+
+      englishInput = translateInResult.translation;
+    } else {
+      // English mode: the user's input is already in English — no translation.
+      englishInput = text.trim();
     }
-
-    const englishInput = translateInResult.translation;
 
     // -------------------------------------------------------------
     // Hop 2: Send English text to local Hermes Agent
@@ -138,28 +189,45 @@ router.post('/chat', async (req, res) => {
     // Step 5 Check: Confirmation Gate for consequential actions
     // -------------------------------------------------------------
     if (hermesResult.requiresConfirmation) {
-      currentStage = 'translate_out';
-      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
+      currentStage = isAmharic ? 'translate_out' : 'hermes';
 
-      // Translate the proposed English response to Amharic for user review
-      let amharicActionText = hermesResult.responseText;
-      let transOutMs = 0;
-      try {
-        const transOut = await translateToAmharic(hermesResult.responseText);
-        amharicActionText = transOut.translation;
-        transOutMs = transOut.durationMs;
-        logData.hops.translateOut = {
-          durationMs: transOut.durationMs,
-          success: true,
-          usage: transOut.usage
-        };
-      } catch (err) {
-        logData.hops.translateOut = { durationMs: 0, success: false, error: err.message };
+      // For the gate payload, Amharic users get the proposed action in
+      // Amharic (translated); English users see Hermes's raw English text.
+      let actionText = hermesResult.responseText;
+      let actionMs = 0;
+      let transOutError = null;
+      if (isAmharic) {
+        sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
+        try {
+          const transOut = await translateToAmharic(hermesResult.responseText);
+          actionText = transOut.translation;
+          actionMs = transOut.durationMs;
+          logData.hops.translateOut = {
+            durationMs: transOut.durationMs,
+            success: true,
+            usage: transOut.usage
+          };
+        } catch (err) {
+          transOutError = err.message;
+          logData.hops.translateOut = { durationMs: 0, success: false, error: err.message };
+        }
+        sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: actionMs });
       }
 
-      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: transOutMs });
+      if (transOutError) {
+        logData.success = false;
+        logData.error = `Translate Out Failed: ${transOutError}`;
+        logData.totalDurationMs = Date.now() - startTime;
+        logRequest(logData);
+        sendSSE(res, {
+          type: 'error',
+          stage: 'translate_out',
+          message: transOutError || ERROR_MSG_TRANSLATE_OUT_FAILED
+        });
+        return res.end();
+      }
 
-      const gateResult = processConfirmationGate(hermesResult, amharicActionText, sessionId);
+      const gateResult = processConfirmationGate(hermesResult, actionText, sessionId);
 
       logData.success = true;
       logData.totalDurationMs = Date.now() - startTime;
@@ -176,36 +244,41 @@ router.post('/chat', async (req, res) => {
     }
 
     // -------------------------------------------------------------
-    // Hop 3: Translate Hermes's English response -> Amharic via Addis AI
+    // Hop 3 (Amharic only): Translate Hermes's English response -> Amharic
     // -------------------------------------------------------------
-    currentStage = 'translate_out';
-    sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
+    let finalResponseText = hermesResult.responseText;
+    if (isAmharic) {
+      currentStage = 'translate_out';
+      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
 
-    let translateOutResult;
-    try {
-      translateOutResult = await translateToAmharic(hermesResult.responseText);
-      logData.hops.translateOut = {
-        durationMs: translateOutResult.durationMs,
-        success: true,
-        usage: translateOutResult.usage
-      };
-      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: translateOutResult.durationMs });
-    } catch (err) {
-      logData.hops.translateOut = {
-        durationMs: 0,
-        success: false,
-        error: err.message
-      };
-      logData.error = `Translate Out Failed: ${err.message}`;
-      logData.totalDurationMs = Date.now() - startTime;
-      logRequest(logData);
+      let translateOutResult;
+      try {
+        translateOutResult = await translateToAmharic(hermesResult.responseText);
+        logData.hops.translateOut = {
+          durationMs: translateOutResult.durationMs,
+          success: true,
+          usage: translateOutResult.usage
+        };
+        sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: translateOutResult.durationMs });
+      } catch (err) {
+        logData.hops.translateOut = {
+          durationMs: 0,
+          success: false,
+          error: err.message
+        };
+        logData.error = `Translate Out Failed: ${err.message}`;
+        logData.totalDurationMs = Date.now() - startTime;
+        logRequest(logData);
 
-      sendSSE(res, {
-        type: 'error',
-        stage: 'translate_out',
-        message: err.message || ERROR_MSG_TRANSLATE_OUT_FAILED
-      });
-      return res.end();
+        sendSSE(res, {
+          type: 'error',
+          stage: 'translate_out',
+          message: err.message || ERROR_MSG_TRANSLATE_OUT_FAILED
+        });
+        return res.end();
+      }
+
+      finalResponseText = translateOutResult.translation;
     }
 
     // -------------------------------------------------------------
@@ -220,12 +293,13 @@ router.post('/chat', async (req, res) => {
       status: 'success',
       requestId,
       sessionId: hermesResult.sessionId,
-      amharicResponse: translateOutResult.translation,
+      language: isAmharic ? 'am' : 'en',
+      amharicResponse: finalResponseText,
       englishResponse: hermesResult.responseText, // Included for debugging/transparency
       timing: {
-        translateInMs: logData.hops.translateIn.durationMs,
+        translateInMs: logData.hops.translateIn ? logData.hops.translateIn.durationMs : null,
         hermesMs: logData.hops.hermesProcessing.durationMs,
-        translateOutMs: logData.hops.translateOut.durationMs,
+        translateOutMs: logData.hops.translateOut ? logData.hops.translateOut.durationMs : null,
         totalMs: logData.totalDurationMs
       }
     });
@@ -282,6 +356,10 @@ router.post('/confirm', async (req, res) => {
   const requestId = `req_conf_${crypto.randomUUID()}`;
   let currentStage = 'hermes';
 
+  // Same language routing as /api/chat: Amharic re-translates the executed
+  // result back to Amharic; English returns Hermes's raw output directly.
+  const isAmharic = getSessionLanguage(pendingData.sessionId) === 'am';
+
   try {
     // Stage 1: Execute confirmed task through Hermes
     currentStage = 'hermes';
@@ -291,20 +369,26 @@ router.post('/confirm', async (req, res) => {
     const hermesResult = await sendTask(confirmationPrompt, { sessionId: pendingData.sessionId });
     sendSSE(res, { type: 'stage', stage: 'hermes', status: 'done', durationMs: hermesResult.durationMs });
 
-    // Stage 2: Translate output to Amharic
-    currentStage = 'translate_out';
-    sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
-    const translateOut = await translateToAmharic(hermesResult.responseText);
-    sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: translateOut.durationMs });
+    const logHops = {
+      hermesProcessing: { durationMs: hermesResult.durationMs, success: true, usage: hermesResult.usage }
+    };
+
+    // Stage 2: Translate output to Amharic (Amharic sessions only)
+    let finalResponseText = hermesResult.responseText;
+    if (isAmharic) {
+      currentStage = 'translate_out';
+      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'start' });
+      const translateOut = await translateToAmharic(hermesResult.responseText);
+      sendSSE(res, { type: 'stage', stage: 'translate_out', status: 'done', durationMs: translateOut.durationMs });
+      logHops.translateOut = { durationMs: translateOut.durationMs, success: true, usage: translateOut.usage };
+      finalResponseText = translateOut.translation;
+    }
 
     logRequest({
       requestId,
       sessionId: pendingData.sessionId,
       success: true,
-      hops: {
-        hermesProcessing: { durationMs: hermesResult.durationMs, success: true, usage: hermesResult.usage },
-        translateOut: { durationMs: translateOut.durationMs, success: true, usage: translateOut.usage }
-      },
+      hops: logHops,
       totalDurationMs: Date.now() - startTime
     });
 
@@ -312,7 +396,7 @@ router.post('/confirm', async (req, res) => {
       type: 'result',
       status: 'success',
       actionExecuted: true,
-      amharicResponse: translateOut.translation,
+      amharicResponse: finalResponseText,
       timingTotalMs: Date.now() - startTime
     });
     return res.end();

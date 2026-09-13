@@ -334,6 +334,78 @@
       color: #fca5a5;
     }
 
+    /* Language Picker Card */
+    .language-picker {
+      width: 100%;
+      max-width: 540px;
+      align-self: center;
+      background: var(--bg-card);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    .language-picker .lp-title {
+      color: var(--text-main);
+      font-weight: 700;
+      font-size: 0.95rem;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .language-picker .lp-subtitle {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      text-align: center;
+    }
+
+    .lp-buttons {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .btn-lang {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--text-main);
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    }
+
+    .btn-lang:hover {
+      background: rgba(217, 119, 6, 0.2);
+      border-color: var(--user-ochre-from);
+      transform: translateY(-1px);
+    }
+
+    /* System Message Bubble */
+    .message-row.system {
+      align-self: center;
+      max-width: 90%;
+    }
+
+    .message-row.system .message-bubble {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px dashed rgba(255, 255, 255, 0.15);
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      text-align: center;
+      border-radius: var(--radius-md);
+      padding: 8px 14px;
+    }
+
     /* Error Bubble */
     .error-card {
       align-self: flex-start;
@@ -487,6 +559,10 @@
       transform: none;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: translateY(0); }
@@ -529,6 +605,8 @@
 
       <input type="text" id="baseUrlInput" class="url-input" value="http://localhost:3000" placeholder="Base URL">
 
+      <button class="btn-action" id="langToggle" onclick="toggleLanguage()" title="Switch language / ቋንቋ ቀይር">🇪🇹 አማርኛ</button>
+
       <button class="btn-action" onclick="resetSession()" title="Reset conversation session">New Session</button>
     </div>
   </header>
@@ -536,12 +614,7 @@
   <!-- Main Chat Thread Viewport -->
   <main>
     <div class="chat-container" id="chatContainer">
-      <!-- Welcome Message -->
-      <div class="message-row agent">
-        <div class="message-bubble">
-👋 **ሰላም! ወደ አገልጋይ እንኳን በደህና መጡ።** እንዴት ልርዳዎት እችላለሁ?
-        </div>
-      </div>
+      <!-- Content rendered by JS (language picker + welcome) -->
     </div>
 
     <!-- Suggestion Prompt Chips -->
@@ -573,7 +646,11 @@
   <script>
     // Client-Side Session State
     let currentSessionId = 'session_' + Math.random().toString(36).substring(2, 9);
-    
+
+    // Conversation language: 'am' (Amharic) or 'en' (English)
+    // 'am' runs the 3-hop translation pipeline; 'en' goes straight to Hermes.
+    let currentLanguage = 'am';
+
     // DOM Elements
     const chatContainer = document.getElementById('chatContainer');
     const messageInput = document.getElementById('messageInput');
@@ -581,6 +658,12 @@
     const baseUrlInput = document.getElementById('baseUrlInput');
     const serverDot = document.getElementById('serverDot');
     const serverStatusText = document.getElementById('serverStatusText');
+    const langToggle = document.getElementById('langToggle');
+
+    const LANGUAGE_LABELS = {
+      am: { short: 'አማ', long: '🇪🇹 አማርኛ', english: 'Amharic' },
+      en: { short: 'EN', long: '🇬🇧 English', english: 'English' }
+    };
 
     function getBaseUrl() {
       const val = baseUrlInput.value.trim().replace(/\/+$/, '');
@@ -590,6 +673,107 @@
 
     if (window.location.origin && window.location.origin !== 'null' && window.location.protocol.startsWith('http')) {
       baseUrlInput.value = window.location.origin;
+    }
+
+    // Always-visible header toggle shows the active language.
+    function updateLangToggle() {
+      const label = LANGUAGE_LABELS[currentLanguage];
+      langToggle.textContent = label.long;
+      langToggle.title = currentLanguage === 'am'
+        ? 'Switch to English language'
+        : 'ወደ አማርኛ ቋንቋ ቀይር (Switch to Amharic)';
+    }
+
+    // Save the chosen language for this session (same endpoint for the
+    // initial pick and for later changes), then reflect it in the UI and
+    // insert a system message. Never rewrites earlier messages.
+    async function selectLanguage(lang) {
+      if (lang !== 'am' && lang !== 'en') return;
+
+      const picker = document.getElementById('languagePicker');
+      const isInitialPick = picker && !picker.classList.contains('hidden');
+      if (currentLanguage === lang && !isInitialPick) return;
+
+      const previous = currentLanguage;
+      currentLanguage = lang;
+      updateLangToggle();
+
+      try {
+        const res = await fetch(`${getBaseUrl()}/api/session/language`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: currentSessionId, language: lang })
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch (err) {
+        // Revert on failure so the UI stays truthful.
+        currentLanguage = previous;
+        updateLangToggle();
+        appendErrorMessage(err.message || 'ቋንቋ መቀየር አልተቻለም።');
+        return;
+      }
+
+      if (picker) picker.classList.add('hidden');
+
+      const msg = currentLanguage === 'en'
+        ? 'Language changed to English. / ቋንቋ ወደ እንግሊዝኛ ተቀይሯል።'
+        : 'ቋንቋ ወደ አማርኛ ተቀይሯል። / Language changed to Amharic.';
+      appendSystemMessage(msg);
+
+      messageInput.placeholder = lang === 'en'
+        ? 'Type your message in English... (Enter to send)'
+        : 'መልእክትዎን እዚህ ይጻፉ... (Enter ለመላክ)';
+      scrollToBottom();
+    }
+
+    function toggleLanguage() {
+      selectLanguage(currentLanguage === 'am' ? 'en' : 'am');
+    }
+
+    function appendSystemMessage(text) {
+      const row = document.createElement('div');
+      row.className = 'message-row system';
+      row.innerHTML = `<div class="message-bubble">${escapeHtml(text)}</div>`;
+      chatContainer.appendChild(row);
+    }
+
+    // Initial language choice shown at the top of a fresh conversation.
+    function renderLanguagePicker() {
+      const card = document.createElement('div');
+      card.className = 'language-picker';
+      card.id = 'languagePicker';
+      card.innerHTML = `
+        <div class="lp-title">ሰላም! ወደ አገልጋይ እንኳን በደህና መጡ።<br>Choose your language / ቋንቋዎን ይምረጡ</div>
+        <div class="lp-subtitle">Amharic responses are translated via the 3-step pipeline; English goes straight to the assistant.</div>
+        <div class="lp-buttons">
+          <button class="btn-lang" onclick="selectLanguage('am')">🇪🇹 አማርኛ</button>
+          <button class="btn-lang" onclick="selectLanguage('en')">🇬🇧 English</button>
+        </div>
+      `;
+      chatContainer.appendChild(card);
+    }
+
+    // Render the fresh-conversation view: language picker + welcome message.
+    function initChat() {
+      currentSessionId = 'session_' + Math.random().toString(36).substring(2, 9);
+      chatContainer.innerHTML = '';
+
+      renderLanguagePicker();
+
+      const welcome = document.createElement('div');
+      welcome.className = 'message-row agent';
+      welcome.innerHTML = `
+        <div class="message-bubble">
+👋 **ሰላም! ወደ አገልጋይ እንኳን በደህና መጡ።** እንዴት ልርዳዎት እችላለሁ?
+        </div>
+      `;
+      chatContainer.appendChild(welcome);
+
+      messageInput.placeholder = 'መልእክትዎን እዚህ ይጻፉ... (Enter ለመላክ)';
+      updateLangToggle();
+      scrollToBottom();
     }
 
     // Check Gateway Server Health
@@ -611,17 +795,10 @@
 
     setInterval(checkHealth, 10000);
     checkHealth();
+    initChat();
 
     function resetSession() {
-      currentSessionId = 'session_' + Math.random().toString(36).substring(2, 9);
-      chatContainer.innerHTML = `
-        <div class="message-row agent">
-          <div class="message-bubble">
-🔄 **አዲስ ውይይት ተጀምሯል።** (Session ID: ${currentSessionId})
-እባክዎን ጥያቄዎን ወይም ትእዛዝዎን በአማርኛ ያስገቡ።
-          </div>
-        </div>
-      `;
+      initChat();
     }
 
     function sendSuggestion(text) {
@@ -685,6 +862,15 @@
       translate_out: { step: '3/3', label: 'መልሱን በማዘጋጀት ላይ...' }
     };
 
+    // English flow: Hermes only, no translation hops -> single-stage indicator.
+    const EN_STAGE_CONFIG = {
+      hermes: { step: '1/1', label: 'Processing your request...' }
+    };
+
+    function stageConfigFor() {
+      return currentLanguage === 'en' ? EN_STAGE_CONFIG : STAGE_CONFIG;
+    }
+
     // Main Send Handler
     async function handleSend(e) {
       if (e) e.preventDefault();
@@ -698,7 +884,7 @@
 
       // Render Pipeline Loading Indicator immediately
       const pipelineCard = appendPipelineIndicator();
-      updatePipelineStageStart(pipelineCard, 'translate_in');
+      updatePipelineStageStart(pipelineCard, currentLanguage === 'en' ? 'hermes' : 'translate_in');
       let finalResult = null;
 
       try {
@@ -759,14 +945,18 @@
       const row = document.createElement('div');
       row.className = 'message-row agent';
 
+      function fmt(ms) {
+        return ms == null ? '—' : `${ms}ms`;
+      }
+
       let debugHtml = '';
       if (timing) {
         debugHtml = `
           <div class="debug-badge">
-            <span>⏱️ ትንታኔ: ${timing.translateInMs}ms</span> |
-            <span>🤖 ማሰናዳት: ${timing.hermesMs}ms</span> |
-            <span>🇪🇹 ዝግጅት: ${timing.translateOutMs}ms</span> |
-            <span>⚡ ጠቅላላ: ${timing.totalMs}ms</span>
+            <span>⏱️ ትንታኔ: ${fmt(timing.translateInMs)}</span> |
+            <span>🤖 ማሰናዳት: ${fmt(timing.hermesMs)}</span> |
+            <span>🇪🇹 ዝግጅት: ${fmt(timing.translateOutMs)}</span> |
+            <span>⚡ ጠቅላላ: ${fmt(timing.totalMs)}</span>
           </div>
         `;
       }
@@ -783,9 +973,11 @@
     function appendPipelineIndicator() {
       const card = document.createElement('div');
       card.className = 'pipeline-status-card';
+      const config = stageConfigFor();
+      const first = currentLanguage === 'en' ? config.hermes : config.translate_in;
       card.innerHTML = `
         <div class="pulse-ring"></div>
-        <span class="status-text">● 1/3: ጥያቄዎን በመተንተን ላይ...</span>
+        <span class="status-text">● ${first.step}: ${first.label}</span>
       `;
       chatContainer.appendChild(card);
       scrollToBottom();
@@ -794,7 +986,7 @@
 
     function updatePipelineStageStart(card, stage) {
       if (!card) return;
-      const config = STAGE_CONFIG[stage] || { step: '•', label: 'በመስራት ላይ...' };
+      const config = stageConfigFor()[stage] || { step: '•', label: 'በመስራት ላይ...' };
       const span = card.querySelector('.status-text');
       const ring = card.querySelector('.pulse-ring');
       if (ring) ring.style.display = 'block';
@@ -805,7 +997,7 @@
 
     function updatePipelineStageDone(card, stage, durationMs) {
       if (!card) return;
-      const config = STAGE_CONFIG[stage] || { step: '•', label: '' };
+      const config = stageConfigFor()[stage] || { step: '•', label: '' };
       const span = card.querySelector('.status-text');
       if (span && durationMs !== undefined) {
         span.textContent = `✓ ${config.step} ተጠናቋል (${durationMs}ms)...`;
