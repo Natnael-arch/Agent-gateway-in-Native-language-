@@ -27,10 +27,14 @@ const readline = require('readline');
 
 const PROXY_BASE_URL = process.env.PROXY_BASE_URL || 'https://usage-proxy-production-b0a8.up.railway.app';
 
-// Paths relative to this script's location (the installer root)
+// Paths relative to this script's location (the installer root or installer/ subfolder)
 const INSTALL_DIR = __dirname;
-const AGENT_GATEWAY_DIR = path.join(INSTALL_DIR, 'agent-gateway');
-const HERMES_DIR = path.join(INSTALL_DIR, 'hermes');
+const AGENT_GATEWAY_DIR = fs.existsSync(path.join(INSTALL_DIR, 'agent-gateway'))
+  ? path.join(INSTALL_DIR, 'agent-gateway')
+  : path.join(INSTALL_DIR, '..', 'agent-gateway');
+const HERMES_DIR = fs.existsSync(path.join(INSTALL_DIR, 'hermes'))
+  ? path.join(INSTALL_DIR, 'hermes')
+  : path.join(INSTALL_DIR, '..', 'hermes');
 
 const AGENT_ENV_PATH = path.join(AGENT_GATEWAY_DIR, '.env');
 const HERMES_ENV_PATH = path.join(HERMES_DIR, '.env');

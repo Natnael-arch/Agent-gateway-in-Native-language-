@@ -1,88 +1,92 @@
-# Agelgay Installer — Phase 1: Bundle Definition
+# Agelgay Installer — Bundle & Packaging Specification (Windows Phase 1 & Phase 5)
 
-## What Ships
+## Overview
 
-| Component | Source | Purpose |
-|-----------|--------|---------|
-| **agent-gateway** | `agent-gateway/` source tree | Node.js Express app — Amharic↔English translation gateway |
-| **Hermes binary** | `~/.hermes/hermes-agent/` (full directory) | Hermes AI Agent CLI + Python venv |
-| **Portable Node** | Node.js v22 LTS (platform zip) | So the customer doesn't need Node pre-installed |
-| **Activation script** | `installer/activate.js` | Exchanges activation code → token, writes configs, validates |
+Agelgay ships as a zero-prerequisite, non-administrative Windows installer (`Agelgay-Setup.exe`). The customer does not need Node.js, Python, or administrator rights pre-installed.
 
-## On-Disk Layout (installed package)
+---
 
-```
-C:\Program Files\Agelgay\                    # Windows (default)
-/opt/agelgay/                                # Linux
-/Applications/Agelgay.app/Contents/          # macOS
+## 1. What Ships
+
+| Component | Source Path | Target Installed Path | Purpose |
+|-----------|-------------|-----------------------|---------|
+| **Portable Node** | Node.js v22 LTS (Windows x64 zip) | `{app}\node\` | Embedded Node runtime so no system Node is required |
+| **agent-gateway** | `agent-gateway/` source tree | `{app}\agent-gateway\` | Express application providing Amharic↔English translation pipeline |
+| **Hermes AI Agent** | `~/.hermes/hermes-agent/` | `{app}\hermes\` | Hermes AI Agent CLI & Python virtual environment |
+| **Activation Script** | `installer/activate.js` | `{app}\activate.js` | Computes machine fingerprint, redeems code with proxy, writes config |
+| **Activation Launcher** | `installer/activate.cmd` | `{app}\activate.cmd` | Batch launcher running `activate.js` via portable `node.exe` |
+| **Start Gateway Launcher** | `installer/start.cmd` | `{app}\start.cmd` | Batch launcher starting `server.js` via portable `node.exe` |
+| **Inno Setup Script** | `installer/AgelgaySetup.iss` | — | Compiler script building `Agelgay-Setup.exe` installer |
+
+---
+
+## 2. On-Disk Layout (Installed Package)
+
+Default non-admin install location: `%LOCALAPPDATA%\Agelgay` (`{localappdata}\Agelgay`)
+
+```text
+%LOCALAPPDATA%\Agelgay\
 │
-├── node\                                     # Portable Node runtime
-│   ├── node.exe                              #   (node binary)
-│   ├── npm, npx                              #   (bundled)
+├── node\                                     # Portable Node.js runtime (v22 LTS)
+│   ├── node.exe                              #   (node executable)
+│   ├── npm, npx                              #   (bundled npm scripts)
 │   └── ...
 │
-├── agent-gateway\                            # The Node.js app
-│   ├── server.js
+├── agent-gateway\                            # Node.js Express Gateway app
+│   ├── server.js                             #   Entrypoint server
 │   ├── package.json
-│   ├── node_modules\                         # Pre-installed deps (dotenv, express)
-│   ├── routes\
-│   ├── services\
-│   ├── middleware\
-│   ├── utils\
-│   ├── public\
-│   ├── .env                                  # ← Written by activate.js (PROXY_TOKEN)
+│   ├── node_modules\                         #   Pre-installed dependencies (express, dotenv)
+│   ├── routes\                               #   Gateway pipeline routing logic
+│   ├── services\                             #   Translator & machine fingerprinting services
+│   ├── middleware\                           #   Confirmation gate & logging middleware
+│   ├── public\                               #   Web interface assets
+│   ├── .env                                  # ← Written by activate.js (PROXY_TOKEN & INSTANCE_FINGERPRINT)
 │   └── .env.example
 │
-├── hermes\                                   # Hermes AI Agent
-│   ├── hermes                                #   Python entrypoint script
-│   ├── hermes-agent\                         #   Full hermes-agent source + venv
-│   │   ├── venv\                             #   Python virtual environment
+├── hermes\                                   # Hermes AI Agent CLI & configuration
+│   ├── hermes                                #   Entrypoint runner
+│   ├── hermes-agent\                         #   Full source & venv
+│   │   ├── venv\
 │   │   └── ...
 │   ├── .env                                  # ← Written by activate.js (DEEPSEEK_API_KEY)
-│   └── config.yaml                           #   Hermes config (model, agent, etc.)
+│   └── config.yaml                           #   Hermes configuration
 │
-├── activate.js                               # Cross-platform activation script
-├── activate.cmd                               # Windows double-click launcher
-└── activate.sh                                # Linux/macOS launcher
+├── activate.js                               # Cross-platform Node activation script
+├── activate.cmd                              # Interactive activation batch launcher
+└── start.cmd                                 # Manual gateway start batch launcher
 ```
 
-## How the Pieces Connect
+---
 
+## 3. Inno Setup Packaging Configuration (`AgelgaySetup.iss`)
+
+The installer is compiled using Inno Setup 6.x:
+
+- **Target Directory**: `{localappdata}\Agelgay`
+- **Privileges**: `PrivilegesRequired=lowest` (No UAC / Admin prompt needed)
+- **Output Executable**: `OutputBaseFilename=Agelgay-Setup`
+- **Post-Install Action**: Immediately launches `cmd.exe /c start "Agelgay Activation" "{app}\activate.cmd"` in an interactive console window for the customer to input their activation code.
+- **Shortcuts**:
+  - Start Menu: `{userprograms}\Agelgay\Agelgay Gateway` -> `{app}\start.cmd`
+  - Start Menu: `{userprograms}\Agelgay\Re-activate Agelgay` -> `{app}\activate.cmd`
+  - Desktop: `{autodesktop}\Agelgay` -> `{app}\start.cmd`
+
+---
+
+## 4. End-to-End Execution Flow
+
+```text
+1. Customer runs Agelgay-Setup.exe (No Admin rights needed).
+2. Files are extracted to %LOCALAPPDATA%\Agelgay.
+3. Post-install launches activate.cmd in a console window.
+4. activate.cmd invokes node\node.exe activate.js.
+5. activate.js:
+   - Computes machine fingerprint (SHA-256 hash).
+   - POSTs activation_code + fingerprint to usage-proxy production /v1/activate.
+   - Writes returned PROXY_TOKEN and INSTANCE_FINGERPRINT into agent-gateway\.env.
+   - Writes DEEPSEEK_API_KEY into hermes\.env.
+   - Configures Hermes config.yaml extra_headers X-Instance-Fingerprint.
+   - Probes local gateway / health endpoint to confirm authentication.
+6. Customer double-clicks Desktop Shortcut (Agelgay) to launch start.cmd.
+7. Gateway runs using portable node\node.exe server.js on http://localhost:3000.
 ```
-Customer runs activate.js
-  │
-  ├─ Prompts for activation code
-  ├─ POSTs to usage-proxy /v1/activate
-  ├─ Gets back a token
-  ├─ Writes token to agent-gateway/.env  as PROXY_TOKEN
-  ├─ Writes token to hermes/.env          as DEEPSEEK_API_KEY (or provider key)
-  ├─ Validates both writes
-  ├─ Makes a test request through agent-gateway
-  └─ Reports success/failure
-```
-
-## Why a Portable Node?
-
-The customer may not have Node.js installed. Bundling Node means:
-- Zero prerequisites — download and run
-- Consistent runtime version (v22 LTS)
-- No PATH manipulation needed
-- No version conflicts with other Node installs
-
-## Why Hermes Needs Its Own .env?
-
-Hermes reads API keys from environment variables:
-- The usage-proxy token (e.g., `p_...`) acts as a DeepSeek API key
-- Hermes routes DeepSeek calls through the proxy at `config.yaml` → `model.base_url`
-- The activation script must write the token with the correct provider key name
-
-## Provider Key Mapping
-
-The activation script reads `hermes/config.yaml` → `model.provider` to determine which env var name to use:
-
-| Provider | Env Var | Example |
-|----------|---------|---------|
-| deepseek | `DEEPSEEK_API_KEY` | `p_abc123...` |
-| openai | `OPENAI_API_KEY` | `p_abc123...` |
-| openrouter | `OPENROUTER_API_KEY` | `p_abc123...` |
-| *fallback* | `DEEPSEEK_API_KEY` | Default if provider unknown |
