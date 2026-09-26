@@ -1,4 +1,4 @@
-const { test, before } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 
 const express = require('express');
@@ -70,6 +70,10 @@ before(async () => {
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(() => {
+  if (server) server.close();
 });
 
 async function postSSE(path, body) {

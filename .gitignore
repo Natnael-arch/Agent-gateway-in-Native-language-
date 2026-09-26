@@ -17,3 +17,8 @@ logs/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local installer test symlinks
+agent-gateway/installer/agent-gateway
+agent-gateway/installer/hermes
+

@@ -17,6 +17,33 @@ function getProxyTranslateUrl() {
 }
 
 /**
+ * Build the headers for an authenticated usage-proxy call: the bearer token
+ * plus the machine fingerprint header so the proxy can verify this request
+ * really comes from the machine the token was activated on. The fingerprint is
+ * a SHA-256 hash (never raw hardware data). Falls back to env override so the
+ * value written by the installer/activation flow stays stable.
+ */
+function buildProxyHeaders() {
+  const token = process.env.PROXY_TOKEN;
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+  let fp = process.env.INSTANCE_FINGERPRINT;
+  if (!fp) {
+    try {
+      fp = require('./fingerprint').getFingerprint();
+    } catch {
+      fp = null; // fingerprint module unavailable -> omit header (proxy: soft allow)
+    }
+  }
+  if (fp) {
+    headers['X-Instance-Fingerprint'] = fp;
+  }
+  return headers;
+}
+
+/**
  * Perform translation call to usage-proxy with retry logic
  * @param {string} text - Source text to translate
  * @param {string} sourceLang - 'am' or 'en'
@@ -56,10 +83,7 @@ async function callAddisTranslate(text, sourceLang, targetLang, retries = 2) {
     try {
       const response = await fetch(getProxyTranslateUrl(), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: buildProxyHeaders(),
         body: JSON.stringify({
           text: text,
           source_language: sourceLang,
