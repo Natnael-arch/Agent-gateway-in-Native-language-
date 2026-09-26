@@ -1,0 +1,67 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'installer/**'
+      - 'agent-gateway/installer/**'
+      - '.github/workflows/build-installer.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'installer/**'
+      - 'agent-gateway/installer/**'
+      - '.github/workflows/build-installer.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Inno Setup Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Directory Structure for Inno Setup
+        shell: powershell
+        run: |
+          # Ensure node\ and hermes\ directories exist for bundling
+          if (!(Test-Path "node")) {
+            New-Item -ItemType Directory -Path "node"
+            Set-Content -Path "node\README.txt" -Value "Portable Node.js Runtime Directory"
+          }
+          if (!(Test-Path "hermes")) {
+            New-Item -ItemType Directory -Path "hermes"
+            Set-Content -Path "hermes\README.txt" -Value "Hermes AI Agent Directory"
+            Set-Content -Path "hermes\config.yaml" -Value "model:`n  provider: deepseek`n"
+          }
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --no-progress -y
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+
+      - name: Compile Installer with ISCC
+        shell: powershell
+        run: |
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $isccPath)) {
+            $isccPath = (Get-Command ISCC.exe -ErrorAction Stop).Path
+          }
+          Write-Host "Compiling installer/AgelgaySetup.iss using $isccPath..."
+          
+          & $isccPath /O"Output" /F"Agelgay-Setup" "installer\AgelgaySetup.iss"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ISCC Compilation failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agelgay-Setup
+          path: Output/Agelgay-Setup.exe
+          if-no-files-found: error
