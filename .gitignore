@@ -22,3 +22,6 @@ Thumbs.db
 agent-gateway/installer/agent-gateway
 agent-gateway/installer/hermes
 
+# Build artifacts
+build/
+

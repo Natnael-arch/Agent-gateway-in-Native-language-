@@ -441,11 +441,10 @@ async function main() {
   // ── Step 5: Write token to agent-gateway/.env ───────────────────────────
   console.log('Configuring agent-gateway...');
 
-  const agentEnv = readFileSafe(AGENT_ENV_PATH);
+  let agentEnv = readFileSafe(AGENT_ENV_PATH);
   if (agentEnv === null) {
-    console.error(`ERROR: agent-gateway/.env not found at ${AGENT_ENV_PATH}`);
-    console.error('The installation may be corrupted. Please reinstall.');
-    process.exit(1);
+    const examplePath = path.join(AGENT_GATEWAY_DIR, '.env.example');
+    agentEnv = readFileSafe(examplePath) || 'PORT=3000\nPROXY_BASE_URL=https://usage-proxy-production-b0a8.up.railway.app\n';
   }
 
   let updatedAgentEnv = upsertEnvVar(agentEnv, 'PROXY_TOKEN', token);
@@ -466,11 +465,9 @@ async function main() {
   console.log('Configuring Hermes...');
 
   const hermesEnvKey = getHermesProviderKeyName();
-  const hermesEnv = readFileSafe(HERMES_ENV_PATH);
+  let hermesEnv = readFileSafe(HERMES_ENV_PATH);
   if (hermesEnv === null) {
-    console.error(`ERROR: Hermes .env not found at ${HERMES_ENV_PATH}`);
-    console.error('The installation may be corrupted. Please reinstall.');
-    process.exit(1);
+    hermesEnv = '';
   }
 
   const updatedHermesEnv = upsertEnvVar(hermesEnv, hermesEnvKey, token);
