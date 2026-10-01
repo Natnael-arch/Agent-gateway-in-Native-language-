@@ -24,4 +24,5 @@ agent-gateway/installer/hermes
 
 # Build artifacts
 build/
+dist/
 

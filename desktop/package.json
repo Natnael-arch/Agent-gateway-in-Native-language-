@@ -1,0 +1,54 @@
+{
+  "name": "agelgay-desktop",
+  "version": "1.0.0",
+  "description": "Agelgay Amharic AI Assistant Desktop Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:linux": "electron-builder build --linux",
+    "build:win": "electron-builder build --win"
+  },
+  "author": "Agelgay",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.agelgay.desktop",
+    "productName": "Agelgay",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../agent-gateway",
+        "to": "agent-gateway",
+        "filter": [
+          "**/*",
+          "!.git/**",
+          "!logs/**"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "dir"
+      ],
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  }
+}
