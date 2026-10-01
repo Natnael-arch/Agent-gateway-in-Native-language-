@@ -2,6 +2,7 @@
   "name": "agelgay-desktop",
   "version": "1.0.0",
   "description": "Agelgay Amharic AI Assistant Desktop Application",
+  "homepage": "https://github.com/Natnael-arch/Agent-gateway-in-Native-language-",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -9,7 +10,10 @@
     "build:linux": "electron-builder build --linux",
     "build:win": "electron-builder build --win"
   },
-  "author": "Agelgay",
+  "author": {
+    "name": "Agelgay",
+    "email": "agelgay@users.noreply.github.com"
+  },
   "license": "ISC",
   "devDependencies": {
     "electron": "^31.2.0",
@@ -19,12 +23,14 @@
     "appId": "com.agelgay.desktop",
     "productName": "Agelgay",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "assets"
     },
     "files": [
       "main.js",
       "preload.js",
-      "package.json"
+      "package.json",
+      "assets/**/*"
     ],
     "extraResources": [
       {
@@ -38,13 +44,21 @@
       }
     ],
     "linux": {
+      "icon": "assets/icon.png",
       "target": [
         "AppImage",
+        "deb",
         "dir"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "synopsis": "Agelgay Amharic AI Assistant Desktop Application",
+      "description": "Agelgay Amharic AI Assistant Desktop Application",
+      "desktop": {
+        "StartupWMClass": "Agelgay"
+      }
     },
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         "nsis",
         "portable"
