@@ -52,12 +52,20 @@ function findPaths() {
     path.resolve(__dirname, '../../build/Agelgay/node', nodeRel)
   ];
 
-  let nodeBin = 'node';
+  let nodeBin = null;
+  let useElectronNode = false;
+
   for (const candidate of nodeCandidates) {
     if (fs.existsSync(candidate)) {
       nodeBin = candidate;
       break;
     }
+  }
+
+  // Fallback to Electron's embedded Node runtime if standalone Node binary isn't bundled
+  if (!nodeBin) {
+    nodeBin = process.execPath;
+    useElectronNode = true;
   }
 
   const serverCandidates = [
@@ -74,7 +82,7 @@ function findPaths() {
     }
   }
 
-  return { nodeBin, serverScript };
+  return { nodeBin, useElectronNode, serverScript };
 }
 
 // Inspect agent-gateway .env file for activation state
@@ -95,7 +103,7 @@ async function ensureGatewayRunning() {
     return true;
   }
 
-  const { nodeBin, serverScript } = findPaths();
+  const { nodeBin, useElectronNode, serverScript } = findPaths();
   if (!serverScript) {
     console.error('[Main] Could not locate agent-gateway/server.js');
     dialog.showMessageBoxSync({
@@ -120,13 +128,22 @@ async function ensureGatewayRunning() {
     return false;
   }
 
-  console.log(`[Main] Spawning gateway process with Node: ${nodeBin}, Script: ${serverScript}`);
+  const spawnEnv = { ...process.env };
+  if (useElectronNode) {
+    spawnEnv.ELECTRON_RUN_AS_NODE = '1';
+  }
+
+  console.log(`[Main] Spawning gateway process with Node: ${nodeBin} (useElectronNode=${useElectronNode}), Script: ${serverScript}`);
   gatewayProcess = spawn(nodeBin, [serverScript], {
     cwd: gatewayDir,
-    env: { ...process.env },
+    env: spawnEnv,
     stdio: 'inherit'
   });
   spawnedByUs = true;
+
+  gatewayProcess.on('error', (err) => {
+    console.error('[Main] Failed to spawn gateway child process:', err);
+  });
 
   gatewayProcess.on('exit', (code, signal) => {
     console.log(`[Main] Gateway child process exited with code ${code}, signal ${signal}`);
