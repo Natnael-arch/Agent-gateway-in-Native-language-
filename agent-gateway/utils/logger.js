@@ -1,13 +1,39 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
-const LOG_DIR = path.join(__dirname, '..', 'logs');
-const LOG_FILE = path.join(LOG_DIR, 'gateway.jsonl');
-
-// Ensure log directory exists
-if (!fs.existsSync(LOG_DIR)) {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+// Determine a safe, writable log directory
+function getLogDir() {
+  if (process.env.AGELGAY_LOG_DIR) {
+    return process.env.AGELGAY_LOG_DIR;
+  }
+  // Try local logs folder first if writable
+  const localDir = path.join(__dirname, '..', 'logs');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    // Test write access
+    const testFile = path.join(localDir, '.write-test');
+    fs.writeFileSync(testFile, '');
+    fs.unlinkSync(testFile);
+    return localDir;
+  } catch (e) {
+    // Read-only or unwritable filesystem (e.g. AppImage mount, /opt/Agelgay)
+    const userLogDir = path.join(os.homedir() || '/tmp', '.agelgay', 'logs');
+    try {
+      if (!fs.existsSync(userLogDir)) {
+        fs.mkdirSync(userLogDir, { recursive: true });
+      }
+      return userLogDir;
+    } catch (err) {
+      return os.tmpdir();
+    }
+  }
 }
+
+const LOG_DIR = getLogDir();
+const LOG_FILE = path.join(LOG_DIR, 'gateway.jsonl');
 
 /**
  * Log a structured gateway request transaction
@@ -44,8 +70,12 @@ function logRequest(logData) {
     error: logData.error || null
   };
 
-  const jsonLine = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(LOG_FILE, jsonLine, 'utf8');
+  try {
+    const jsonLine = JSON.stringify(entry) + '\n';
+    fs.appendFileSync(LOG_FILE, jsonLine, 'utf8');
+  } catch (e) {
+    console.error('[LOG] Failed to write to log file:', e.message);
+  }
 
   // Console output for immediate visibility
   console.log(`[LOG] Request ${entry.requestId || 'N/A'} completed in ${entry.totalDurationMs}ms | Success: ${entry.success}`);
